@@ -35,12 +35,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/digitalenergy/paasbaan.git"
+    "url": "https://github.com/saadanjum/paasbaan.git"
   },
   "bugs": {
-    "url": "https://github.com/digitalenergy/paasbaan/issues"
+    "url": "https://github.com/saadanjum/paasbaan/issues"
   },
-  "homepage": "https://github.com/digitalenergy/paasbaan#readme",
+  "homepage": "https://github.com/saadanjum/paasbaan#readme",
   "engines": {
     "node": ">=16.0.0"
   }
