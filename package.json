@@ -17,7 +17,7 @@
     "authorization",
     "express"
   ],
-  "author": "Digital Energy",
+  "author": "Saad Anjum",
   "license": "MIT",
   "dependencies": {
     "bcrypt": "^5.1.1",
