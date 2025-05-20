@@ -1,0 +1,45 @@
+# Development files
+node_modules/
+.git/
+.gitignore
+.env
+.env.*
+.vscode/
+.idea/
+.DS_Store
+
+# Test files
+__tests__/
+*.test.js
+*.spec.js
+coverage/
+jest.config.js
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Build files
+dist/
+build/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Other
+.editorconfig
+.eslintrc
+.eslintignore
+.prettierrc
+.prettierignore
+.travis.yml
+.github/
+CONTRIBUTING.md
+CHANGELOG.md
+LICENSE 
