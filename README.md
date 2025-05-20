@@ -66,7 +66,7 @@ The module expects the following tables to exist in your database:
    - `updated_at`
    - `deleted_at`
 
-You can create these tables using Sequelize migrations or directly in your database.
+You can create these tables using Sequelize migrations or directly in your database. Paasbaan will look for these sequelize models passed on to the module through sequelize database object.
 
 ## Usage
 
