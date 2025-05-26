@@ -8,15 +8,9 @@
  * @param {Object} db - Sequelize database instance
  * @returns {Promise<void>}
  */
-async function validateTables(db) {
+async function validateTables(db, requiredTables) {
   try {
     // Check if the required tables exist in the database
-    const requiredTables = [
-      'access_groups',
-      'access_group_permissions',
-      'permissions',
-      'access_groups_users'
-    ];
 
     // Get all table names from the db object
     const tableResults = [];

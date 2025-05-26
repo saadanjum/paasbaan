@@ -7,6 +7,7 @@ const NodeCache = require('node-cache');
 const { validateTables, setupInitialData } = require('./src/utils/dbValidation');
 const authMiddleware = require('./src/middleware/authMiddleware');
 const { AccessGroupsManager } = require('./src/utils/accessGroupsManager');
+const { ResourceLevelPermissionsManager } = require('./src/utils/resourceLevelPermissionsManager');
 
 class AccessControl {
   /**
@@ -36,6 +37,7 @@ class AccessControl {
     this.route_access = config.route_access;
     this.userIdKey = config.userIdKey || 'userId';
     this.logging = config.logging || false;
+    this.resourceLevelPermissions = config.resourceLevelPermissions || false;
     
     // Initialize cache if enabled
     this.cache = config.cache || false;
@@ -43,11 +45,12 @@ class AccessControl {
       this.cacheEngine = new NodeCache(config.cache_config || {});
     }
 
+    // Initialize managers
+    this.accessGroupsManager = new AccessGroupsManager(this.db);
+    this.resourceLevelPermissionsManager = new ResourceLevelPermissionsManager(this.db);
+
     // Validate database tables and setup initial data
     this.validateAndSetupDb();
-    
-    // Initialize access groups manager
-    this.accessGroupsManager = new AccessGroupsManager(this.db);
   }
 
   /**
@@ -55,7 +58,20 @@ class AccessControl {
    */
   async validateAndSetupDb() {
     try {
-      await validateTables(this.db);
+
+      const requiredTables = [
+        'access_groups',
+        'access_group_permissions',
+        'permissions',
+        'access_groups_users'
+      ];
+      
+      if (this.resourceLevelPermissions) {
+        requiredTables.push('resource_level_permissions');
+        requiredTables.push('resource_level_permissions_types');
+      }
+
+      await validateTables(this.db, requiredTables);
       await setupInitialData(this.db);
       
       if (this.logging === 'console') {
@@ -193,6 +209,166 @@ class AccessControl {
       
       if (this.logging === 'console') {
         console.log(`[AccessControl] Cache cleared for user ${userId}`);
+      }
+    }
+  }
+
+  /**
+   * Add resource level permission
+   * @param {number} permission_id - Permission ID
+   * @param {Array<number>} resource_ids - Array of resource IDs
+   * @param {string} resource_name - Resource type name
+   * @param {number} access_group_id - Access group ID
+   * @returns {Promise<Array>} - Array of created resource level permissions
+   */
+  async addResourceLevelPermission(permission_id, resource_ids, resource_name, access_group_id) {
+    try {
+      const permissions = await this.resourceLevelPermissionsManager.addResourceLevelPermission(
+        permission_id,
+        resource_ids,
+        resource_name,
+        access_group_id
+      );
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Added resource level permissions for ${resource_name}`);
+      }
+
+      // Clear cache for affected users
+      if (this.cache === 'in-memory') {
+        const users = await this.accessGroupsManager.getUsersInAccessGroup(access_group_id);
+        users.forEach(user => this.clearUserCache(user.id));
+      }
+
+      return permissions;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error adding resource level permission:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Remove resource level permission
+   * @param {number} permission_id - Permission ID
+   * @param {Array<number>} resource_ids - Array of resource IDs
+   * @param {string} resource_name - Resource type name
+   * @param {number} access_group_id - Access group ID
+   * @returns {Promise<number>} - Number of deleted permissions
+   */
+  async removeResourceLevelPermission(permission_id, resource_ids, resource_name, access_group_id) {
+    try {
+      const deleted = await this.resourceLevelPermissionsManager.removeResourceLevelPermission(
+        permission_id,
+        resource_ids,
+        resource_name,
+        access_group_id
+      );
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Removed ${deleted} resource level permissions for ${resource_name}`);
+      }
+
+      // Clear cache for affected users
+      if (this.cache === 'in-memory') {
+        const users = await this.accessGroupsManager.getUsersInAccessGroup(access_group_id);
+        users.forEach(user => this.clearUserCache(user.id));
+      }
+
+      return deleted;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error removing resource level permission:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get resource level permissions for a user
+   * @param {string} resource_name - Resource type name
+   * @param {number} permission_id - Permission ID to check for
+   * @param {number} user_id - User ID
+   * @returns {Promise<Array>} - Array of resource IDs the user has access to
+   */
+  async getResourceLevelPermissions(resource_name, permission_id, user_id) {
+    try {
+      // Check cache first if enabled
+      if (this.cache === 'in-memory') {
+        const cacheKey = `resource_permissions_${user_id}_${resource_name}_${permission_id}`;
+        const cachedPermissions = this.cacheEngine.get(cacheKey);
+        
+        if (cachedPermissions) {
+          return cachedPermissions;
+        }
+      }
+
+      const permissions = await this.resourceLevelPermissionsManager.getResourceLevelPermissions(
+        resource_name,
+        permission_id,
+        user_id
+      );
+
+      // Set cache if enabled
+      if (this.cache === 'in-memory') {
+        const cacheKey = `resource_permissions_${user_id}_${resource_name}_${permission_id}`;
+        this.cacheEngine.set(cacheKey, permissions);
+      }
+
+      return permissions;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error getting resource level permissions:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Check if user has permission to access resources
+   * @param {string} resource_name - Resource type name
+   * @param {number} permission_id - Permission ID to check for
+   * @param {Array<number>} resource_ids - Array of resource IDs to check
+   * @param {number} user_id - User ID
+   * @returns {Promise<boolean>} - True if user has access to all resources with the specified permission
+   */
+  async hasResourceAccess(resource_name, permission_id, resource_ids, user_id) {
+    try {
+      return await this.resourceLevelPermissionsManager.hasResourceAccess(
+        resource_name,
+        permission_id,
+        resource_ids,
+        user_id
+      );
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error checking resource access:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Clear user's resource permissions cache
+   * @param {number} user_id - User ID
+   * @param {string} [resource_name] - Optional resource type name to clear specific cache
+   * @param {number} [permission_id] - Optional permission ID to clear specific cache
+   */
+  clearResourcePermissionsCache(user_id, resource_name, permission_id) {
+    if (this.cache === 'in-memory') {
+      if (resource_name && permission_id) {
+        const cacheKey = `resource_permissions_${user_id}_${resource_name}_${permission_id}`;
+        this.cacheEngine.del(cacheKey);
+      } else {
+        // Clear all resource permissions cache for user
+        const keys = this.cacheEngine.keys();
+        const userKeys = keys.filter(key => key.startsWith(`resource_permissions_${user_id}_`));
+        userKeys.forEach(key => this.cacheEngine.del(key));
+      }
+      
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Cleared resource permissions cache for user ${user_id}`);
       }
     }
   }

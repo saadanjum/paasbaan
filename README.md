@@ -1,16 +1,17 @@
 # Paasbaan - Access Control Module
 
-A flexible and powerful access control module for Express.js applications with JWT authentication and permission-based authorization.
+A flexible and powerful access control module for Express.js applications with JWT authentication, permission-based authorization, and resource-level access control.
 
 ## Features
 
 - JWT authentication
 - Permission-based access control
 - Route-level authorization
+- Resource-level access control
 - Support for user roles/access groups
 - Permission caching (in-memory)
 - CLI interface for managing permissions and access groups
-- Database integration with Sequelize
+- Database integration with Sequelize (MS SQL Server supported)
 
 ## Installation
 
@@ -62,6 +63,23 @@ The module expects the following tables to exist in your database:
    - `id`
    - `access_group_id`
    - `user_id`
+   - `created_at`
+   - `updated_at`
+   - `deleted_at`
+
+5. `resource_level_permissions_types` - Stores resource types for resource-level permissions
+   - `id`
+   - `name`
+   - `created_at`
+   - `updated_at`
+   - `deleted_at`
+
+6. `resource_level_permissions` - Stores resource-level permissions
+   - `id`
+   - `permission_id`
+   - `resource_id`
+   - `resource_type_id`
+   - `access_group_id`
    - `created_at`
    - `updated_at`
    - `deleted_at`
@@ -215,6 +233,128 @@ Clears the cached permissions for a user.
 
 ```javascript
 accessControl.clearUserCache(userId);
+```
+
+### Resource Level Permissions
+
+Resource level permissions allow you to restrict access to specific resources (e.g., locations, departments) for users with specific permissions. This is useful when you want to grant users access to only certain instances of a resource type with specific permissions.
+
+#### Example Usage
+
+```javascript
+const accessControl = new AccessControl({
+  db: db,
+  route_access: {
+    '/api/observations': {
+      method: 'GET',
+      permissions: ['read:observations']
+    }
+  },
+  cache: 'in-memory'
+});
+
+// Get the permission ID for 'read:observations'
+const permission = await accessControl.getPermissionByCode('read:observations');
+
+// Grant access to specific locations for an access group with read permission
+await accessControl.addResourceLevelPermission(
+  permission.id,    // ID of the 'read:observations' permission
+  [1, 2, 3],       // Array of location IDs
+  'location',      // Resource type name
+  accessGroupId    // Access group ID
+);
+
+// Check if a user has read access to specific locations
+const hasAccess = await accessControl.hasResourceAccess(
+  'location',      // Resource type name
+  permission.id,   // ID of the 'read:observations' permission
+  [1, 2],          // Array of location IDs to check
+  userId           // User ID
+);
+
+// Get all locations a user has read access to
+const accessibleLocations = await accessControl.getResourceLevelPermissions(
+  'location',      // Resource type name
+  permission.id,   // ID of the 'read:observations' permission
+  userId           // User ID
+);
+
+// Remove read access to specific locations
+await accessControl.removeResourceLevelPermission(
+  permission.id,   // ID of the permission
+  [2, 3],          // Array of location IDs to remove
+  'location',      // Resource type name
+  accessGroupId    // Access group ID
+);
+```
+
+#### Resource Level Permission Methods
+
+##### `addResourceLevelPermission(permission_id, resource_ids, resource_name, access_group_id)`
+
+Grants an access group permission to access specific resources.
+
+- `permission_id`: ID of the permission
+- `resource_ids`: Array of resource IDs to grant access to
+- `resource_name`: Name of the resource type (e.g., 'location')
+- `access_group_id`: ID of the access group
+
+```javascript
+await accessControl.addResourceLevelPermission(1, [1, 2, 3], 'location', 1);
+```
+
+##### `removeResourceLevelPermission(permission_id, resource_ids, resource_name, access_group_id)`
+
+Removes an access group's permission to access specific resources.
+
+- `permission_id`: ID of the permission
+- `resource_ids`: Array of resource IDs to remove access from
+- `resource_name`: Name of the resource type
+- `access_group_id`: ID of the access group
+
+```javascript
+await accessControl.removeResourceLevelPermission(1, [2, 3], 'location', 1);
+```
+
+##### `getResourceLevelPermissions(resource_name, permission_id, user_id)`
+
+Gets all resources of a specific type that a user has access to with a specific permission.
+
+- `resource_name`: Name of the resource type
+- `permission_id`: ID of the permission to check for
+- `user_id`: ID of the user
+
+```javascript
+const accessibleResources = await accessControl.getResourceLevelPermissions('location', 1, 1);
+```
+
+##### `hasResourceAccess(resource_name, permission_id, resource_ids, user_id)`
+
+Checks if a user has specific permission to access resources.
+
+- `resource_name`: Name of the resource type
+- `permission_id`: ID of the permission to check for
+- `resource_ids`: Array of resource IDs to check
+- `user_id`: ID of the user
+
+```javascript
+const hasAccess = await accessControl.hasResourceAccess('location', 1, [1, 2], 1);
+```
+
+##### `clearResourcePermissionsCache(user_id, resource_name, permission_id)`
+
+Clears the cached resource permissions for a user.
+
+- `user_id`: ID of the user
+- `resource_name` (optional): Name of the resource type to clear cache for
+- `permission_id` (optional): ID of the permission to clear cache for
+
+```javascript
+// Clear all resource permissions cache for a user
+accessControl.clearResourcePermissionsCache(1);
+
+// Clear cache for specific resource type and permission
+accessControl.clearResourcePermissionsCache(1, 'location', 1);
 ```
 
 ## CLI Usage

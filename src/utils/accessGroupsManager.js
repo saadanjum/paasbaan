@@ -288,6 +288,37 @@ class AccessGroupsManager {
       throw new Error(`Error getting permissions: ${error.message}`);
     }
   }
+
+  /**
+   * Get all users in an access group
+   * @param {number} accessGroupId - Access group ID
+   * @returns {Promise<Array>} - Array of users
+   */
+  async getUsersInAccessGroup(accessGroupId) {
+    try {
+      if (!accessGroupId) {
+        throw new Error('Access group ID is required');
+      }
+
+      const users = await this.db.User.findAll({
+        include: [{
+          model: this.AccessGroup,
+          as: 'access_groups',
+          where: {
+            id: accessGroupId
+          },
+          // through: {
+          //   model: this.AccessGroupUser
+          // },
+          required: true
+        }]
+      });
+
+      return users;
+    } catch (error) {
+      throw new Error(`Error getting users in access group: ${error.message}`);
+    }
+  }
 }
 
 module.exports = {
