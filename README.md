@@ -69,6 +69,7 @@ The module expects the following tables to exist in your database:
 
 5. `resource_level_permissions_types` - Stores resource types for resource-level permissions
    - `id`
+   - `permission_id` (foreign key to permissions table)
    - `name`
    - `created_at`
    - `updated_at`
@@ -85,6 +86,25 @@ The module expects the following tables to exist in your database:
    - `deleted_at`
 
 You can create these tables using Sequelize migrations or directly in your database. Paasbaan will look for these sequelize models passed on to the module through sequelize database object.
+
+## Permission-Resource Type Configuration
+
+Before granting resource-level permissions, you must first define which resource types require resource-level access for specific permissions. This is done through the `resource_level_permissions_types` table, which links permissions to the resource types they can control.
+
+### Setting Up Resource Type Requirements
+
+```javascript
+const accessControl = new AccessControl({ /* config */ });
+
+// Define that 'read:observations' permission requires resource-level access for 'location'
+await accessControl.addResourceTypeForPermission(5, 'location'); // 5 is the permission ID for 'read:observations'
+
+// Define that 'read:observations' also requires resource-level access for 'department'
+await accessControl.addResourceTypeForPermission(5, 'department');
+
+// Define that 'update:observations' requires resource-level access for 'location'
+await accessControl.addResourceTypeForPermission(6, 'location'); // 6 is the permission ID for 'update:observations'
+```
 
 ## Usage
 
@@ -227,6 +247,91 @@ Adds a user to an access group.
 await accessControl.addUserToAccessGroup(accessGroupId, userId);
 ```
 
+##### `removeUserFromAccessGroup(accessGroupId, userId)`
+
+Removes a user from an access group.
+
+```javascript
+const removed = await accessControl.removeUserFromAccessGroup(accessGroupId, userId);
+console.log(removed); // true if removed, false if not found
+```
+
+##### `updateAccessGroup(accessGroupId, updateData)`
+
+Updates an access group's information.
+
+- `accessGroupId`: ID of the access group to update
+- `updateData`: Object containing fields to update (`name`, `description`)
+
+```javascript
+// Update access group name and description
+const updatedGroup = await accessControl.updateAccessGroup(1, {
+  name: 'Senior Editors',
+  description: 'Senior content editors with advanced permissions'
+});
+
+// Update only the description
+const updatedGroup = await accessControl.updateAccessGroup(1, {
+  description: 'Updated description'
+});
+```
+
+##### `deleteAccessGroup(accessGroupId, force)`
+
+Deletes an access group. By default, performs a soft delete.
+
+- `accessGroupId`: ID of the access group to delete
+- `force` (optional): If `true`, performs a hard delete. Default: `false`
+
+**Important**: The access group must have no users, permissions, or resource-level permissions assigned before it can be deleted.
+
+```javascript
+// Soft delete (recommended)
+const deleted = await accessControl.deleteAccessGroup(1);
+
+// Hard delete (permanent)
+const deleted = await accessControl.deleteAccessGroup(1, true);
+
+// Example of safe deletion process
+try {
+  // Remove all users first
+  const users = await accessControl.getUsersInAccessGroup(1);
+  for (const user of users) {
+    await accessControl.removeUserFromAccessGroup(1, user.id);
+  }
+
+  // Remove all permissions
+  // Note: You'll need to implement removePermissionFromAccessGroup or remove manually
+
+  // Now delete the access group
+  const deleted = await accessControl.deleteAccessGroup(1);
+} catch (error) {
+  console.error('Error deleting access group:', error.message);
+}
+```
+
+##### `getAccessGroupById(accessGroupId)`
+
+Gets an access group by its ID.
+
+```javascript
+const accessGroup = await accessControl.getAccessGroupById(1);
+if (accessGroup) {
+  console.log(`Group: ${accessGroup.name} - ${accessGroup.description}`);
+} else {
+  console.log('Access group not found');
+}
+```
+
+##### `removePermissionFromAccessGroup(accessGroupId, permissionId)`
+
+Removes a permission from an access group.
+
+```javascript
+const removed = await accessControl.removePermissionFromAccessGroup(1, 5);
+console.log(removed); // true if removed, false if not found
+```
+
 ##### `clearUserCache(userId)`
 
 Clears the cached permissions for a user.
@@ -253,10 +358,13 @@ const accessControl = new AccessControl({
   cache: 'in-memory'
 });
 
-// Get the permission ID for 'read:observations'
+// Step 1: Get the permission ID for 'read:observations'
 const permission = await accessControl.getPermissionByCode('read:observations');
 
-// Grant access to specific locations for an access group with read permission
+// Step 2: Define that this permission requires resource-level access for 'location'
+await accessControl.addResourceTypeForPermission(permission.id, 'location');
+
+// Step 3: Grant access to specific locations for an access group with read permission
 await accessControl.addResourceLevelPermission(
   permission.id,    // ID of the 'read:observations' permission
   [1, 2, 3],       // Array of location IDs
@@ -278,6 +386,10 @@ const accessibleLocations = await accessControl.getResourceLevelPermissions(
   permission.id,   // ID of the 'read:observations' permission
   userId           // User ID
 );
+
+// Get which resource types require resource-level access for this permission
+const requiredResourceTypes = await accessControl.getResourceTypesForPermission(permission.id);
+console.log(requiredResourceTypes); // ['location']
 
 // Remove read access to specific locations
 await accessControl.removeResourceLevelPermission(
@@ -357,6 +469,58 @@ accessControl.clearResourcePermissionsCache(1);
 accessControl.clearResourcePermissionsCache(1, 'location', 1);
 ```
 
+##### `getAccessGroupResourceLevelPermissions(access_group_id, resource_name, permission_id)`
+
+Gets resource level permissions assigned to an access group with optional filtering.
+
+- `access_group_id`: ID of the access group
+- `resource_name` (optional): Name of the resource type to filter by
+- `permission_id` (optional): ID of the permission to filter by
+
+Returns an object with a `permissions` array where each permission contains:
+- `id`: Permission ID
+- `code`: Permission code
+- `name`: Permission name
+- `resources`: Object with resource types as keys and arrays of resource IDs as values
+
+```javascript
+// Get all resource level permissions for an access group
+const result = await accessControl.getAccessGroupResourceLevelPermissions(1);
+
+// Get resource level permissions for specific resource type
+const locationResult = await accessControl.getAccessGroupResourceLevelPermissions(1, 'location');
+
+// Get resource level permissions for specific permission
+const readResult = await accessControl.getAccessGroupResourceLevelPermissions(1, null, 5);
+
+// Get resource level permissions for specific resource type and permission
+const specificResult = await accessControl.getAccessGroupResourceLevelPermissions(1, 'location', 5);
+
+// Example response structure:
+// {
+//   permissions: [
+//     {
+//       id: 4,
+//       code: 'read:observations',
+//       name: 'Read Observations',
+//       resources: {
+//         location: [1, 2, 4, 5],
+//         department: [10, 15, 20]
+//       }
+//     },
+//     {
+//       id: 5,
+//       code: 'update:observations',
+//       name: 'Update Observations',
+//       resources: {
+//         location: [1, 2],
+//         department: [10]
+//       }
+//     }
+//   ]
+// }
+```
+
 ## CLI Usage
 
 The module provides a CLI tool for managing access groups and permissions.
@@ -411,3 +575,103 @@ module.exports = {
 ## License
 
 MIT 
+
+## Permission-Resource Type Management
+
+These methods allow you to configure which resource types require resource-level access for specific permissions.
+
+##### `getResourceTypesForPermission(permission_id)`
+
+Gets the resource types that require resource-level access for a given permission.
+
+- `permission_id`: ID of the permission
+
+```javascript
+// Get resource types that require resource-level access for permission ID 5
+const resourceTypes = await accessControl.getResourceTypesForPermission(5);
+console.log(resourceTypes); // ['location', 'department']
+```
+
+##### `addResourceTypeForPermission(permission_id, resource_name)`
+
+Defines that a permission requires resource-level access for a specific resource type.
+
+- `permission_id`: ID of the permission
+- `resource_name`: Name of the resource type
+
+```javascript
+// Define that 'read:observations' permission (ID: 5) requires resource-level access for 'location'
+await accessControl.addResourceTypeForPermission(5, 'location');
+
+// Define that it also requires resource-level access for 'department'
+await accessControl.addResourceTypeForPermission(5, 'department');
+```
+
+##### `removeResourceTypeForPermission(permission_id, resource_name)`
+
+Removes the requirement for resource-level access for a specific resource type and permission.
+
+- `permission_id`: ID of the permission
+- `resource_name`: Name of the resource type
+
+```javascript
+// Remove the requirement for 'department' resource-level access for permission ID 5
+const removed = await accessControl.removeResourceTypeForPermission(5, 'department');
+console.log(removed); // true if removed, false if not found
+```
+
+##### `getAllPermissionsWithResourceTypes(includeWithoutResourceTypes)`
+
+Gets all permissions along with their required resource types. Useful for admin interfaces and configuration management.
+
+- `includeWithoutResourceTypes` (optional): Whether to include permissions that don't have resource type requirements. Default: `true`
+
+Returns an array of permission objects with their resource types:
+- `id`: Permission ID
+- `code`: Permission code
+- `name`: Permission name
+- `description`: Permission description
+- `resource_types`: Array of resource type names required for this permission
+
+```javascript
+// Get all permissions with their resource type requirements
+const allPermissions = await accessControl.getAllPermissionsWithResourceTypes();
+
+// Get only permissions that have resource type requirements
+const permissionsWithResourceTypes = await accessControl.getAllPermissionsWithResourceTypes(false);
+
+// Example response:
+// [
+//   {
+//     id: 1,
+//     code: 'read:users',
+//     name: 'Read Users',
+//     description: 'Permission to read user data',
+//     resource_types: [] // No resource-level restrictions
+//   },
+//   {
+//     id: 5,
+//     code: 'read:observations',
+//     name: 'Read Observations',
+//     description: 'Permission to read observation data',
+//     resource_types: ['location', 'department'] // Requires resource-level access
+//   },
+//   {
+//     id: 6,
+//     code: 'update:observations',
+//     name: 'Update Observations',
+//     description: 'Permission to update observation data',
+//     resource_types: ['location'] // Requires resource-level access for locations only
+//   }
+// ]
+
+// Usage in an admin interface
+allPermissions.forEach(permission => {
+  console.log(`Permission: ${permission.name} (${permission.code})`);
+  if (permission.resource_types.length > 0) {
+    console.log(`  Requires resource-level access for: ${permission.resource_types.join(', ')}`);
+  } else {
+    console.log(`  No resource-level restrictions`);
+  }
+});
+```

@@ -46,6 +46,17 @@ function initModels(sequelize) {
     as: 'resource_type'
   });
 
+  // Permission to ResourceLevelPermissionType associations
+  Permission.hasMany(ResourceLevelPermissionType, {
+    foreignKey: 'permission_id',
+    as: 'resource_types'
+  });
+
+  ResourceLevelPermissionType.belongsTo(Permission, {
+    foreignKey: 'permission_id',
+    as: 'permission'
+  });
+
   Permission.hasMany(ResourceLevelPermission, {
     foreignKey: 'permission_id',
     as: 'resource_level_permissions'

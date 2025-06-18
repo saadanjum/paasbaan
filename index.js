@@ -199,6 +199,125 @@ class AccessControl {
   }
 
   /**
+   * Remove user from access group
+   * @param {number} accessGroupId - Access group ID
+   * @param {number} userId - User ID
+   * @returns {Promise<boolean>} - True if user was removed, false otherwise
+   */
+  async removeUserFromAccessGroup(accessGroupId, userId) {
+    return this.accessGroupsManager.removeUserFromAccessGroup(accessGroupId, userId);
+  }
+
+  /**
+   * Update an access group
+   * @param {number} accessGroupId - Access group ID
+   * @param {Object} updateData - Data to update (name, description)
+   * @returns {Promise<Object>} - Updated access group
+   */
+  async updateAccessGroup(accessGroupId, updateData) {
+    try {
+      const updatedAccessGroup = await this.accessGroupsManager.updateAccessGroup(accessGroupId, updateData);
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Updated access group ${accessGroupId}`);
+      }
+
+      // Clear cache for users in this access group if name was changed
+      if (updateData.name && this.cache === 'in-memory') {
+        const users = await this.accessGroupsManager.getUsersInAccessGroup(accessGroupId);
+        users.forEach(user => this.clearUserCache(user.id));
+      }
+
+      return updatedAccessGroup;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error updating access group:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Delete an access group
+   * @param {number} accessGroupId - Access group ID
+   * @param {boolean} [force=false] - Whether to force delete (hard delete)
+   * @returns {Promise<boolean>} - True if deleted successfully
+   */
+  async deleteAccessGroup(accessGroupId, force = false) {
+    try {
+      // Clear cache for users in this access group before deletion
+      if (this.cache === 'in-memory') {
+        const users = await this.accessGroupsManager.getUsersInAccessGroup(accessGroupId);
+        users.forEach(user => this.clearUserCache(user.id));
+      }
+
+      const deleted = await this.accessGroupsManager.deleteAccessGroup(accessGroupId, force);
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] ${deleted ? 'Deleted' : 'Failed to delete'} access group ${accessGroupId}`);
+      }
+
+      return deleted;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error deleting access group:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get access group by ID
+   * @param {number} accessGroupId - Access group ID
+   * @returns {Promise<Object|null>} - Access group or null if not found
+   */
+  async getAccessGroupById(accessGroupId) {
+    try {
+      const accessGroup = await this.accessGroupsManager.getAccessGroupById(accessGroupId);
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Retrieved access group ${accessGroupId}`);
+      }
+
+      return accessGroup;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error getting access group:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Remove permission from access group
+   * @param {number} accessGroupId - Access group ID
+   * @param {number} permissionId - Permission ID
+   * @returns {Promise<boolean>} - True if permission was removed, false otherwise
+   */
+  async removePermissionFromAccessGroup(accessGroupId, permissionId) {
+    try {
+      const removed = await this.accessGroupsManager.removePermissionFromAccessGroup(accessGroupId, permissionId);
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] ${removed ? 'Removed' : 'Failed to remove'} permission ${permissionId} from access group ${accessGroupId}`);
+      }
+
+      // Clear cache for users in this access group
+      if (this.cache === 'in-memory') {
+        const users = await this.accessGroupsManager.getUsersInAccessGroup(accessGroupId);
+        users.forEach(user => this.clearUserCache(user.id));
+      }
+
+      return removed;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error removing permission from access group:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Clear user permissions cache
    * @param {string|number} userId - User ID
    */
@@ -370,6 +489,132 @@ class AccessControl {
       if (this.logging === 'console') {
         console.log(`[AccessControl] Cleared resource permissions cache for user ${user_id}`);
       }
+    }
+  }
+
+  /**
+   * Get resource level permissions for an access group
+   * @param {number} access_group_id - Access group ID
+   * @param {string} [resource_name] - Optional resource type name to filter by
+   * @param {number} [permission_id] - Optional permission ID to filter by
+   * @returns {Promise<Array>} - Array of resource level permissions with details
+   */
+  async getAccessGroupResourceLevelPermissions(access_group_id, resource_name, permission_id) {
+    try {
+      const permissions = await this.resourceLevelPermissionsManager.getAccessGroupResourceLevelPermissions(
+        access_group_id,
+        resource_name,
+        permission_id
+      );
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Retrieved ${permissions.length} resource level permissions for access group ${access_group_id}`);
+      }
+
+      return permissions;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error getting access group resource level permissions:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get resource types that require resource-level access for a given permission
+   * @param {number} permission_id - Permission ID
+   * @returns {Promise<Array>} - Array of resource type names
+   */
+  async getResourceTypesForPermission(permission_id) {
+    try {
+      const resourceTypes = await this.resourceLevelPermissionsManager.getResourceTypesForPermission(permission_id);
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Retrieved ${resourceTypes.length} resource types for permission ${permission_id}`);
+      }
+
+      return resourceTypes;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error getting resource types for permission:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Add resource type requirement for a permission
+   * @param {number} permission_id - Permission ID
+   * @param {string} resource_name - Resource type name
+   * @returns {Promise<Object>} - Created resource level permission type
+   */
+  async addResourceTypeForPermission(permission_id, resource_name) {
+    try {
+      const resourceType = await this.resourceLevelPermissionsManager.addResourceTypeForPermission(
+        permission_id,
+        resource_name
+      );
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Added resource type '${resource_name}' for permission ${permission_id}`);
+      }
+
+      return resourceType;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error adding resource type for permission:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Remove resource type requirement for a permission
+   * @param {number} permission_id - Permission ID
+   * @param {string} resource_name - Resource type name
+   * @returns {Promise<boolean>} - True if removed, false if not found
+   */
+  async removeResourceTypeForPermission(permission_id, resource_name) {
+    try {
+      const removed = await this.resourceLevelPermissionsManager.removeResourceTypeForPermission(
+        permission_id,
+        resource_name
+      );
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] ${removed ? 'Removed' : 'Failed to remove'} resource type '${resource_name}' for permission ${permission_id}`);
+      }
+
+      return removed;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error removing resource type for permission:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Get all permissions with their required resource types
+   * @param {boolean} [includeWithoutResourceTypes=true] - Whether to include permissions that don't have resource type requirements
+   * @returns {Promise<Array>} - Array of permissions with their resource types
+   */
+  async getAllPermissionsWithResourceTypes(includeWithoutResourceTypes = true) {
+    try {
+      const permissions = await this.resourceLevelPermissionsManager.getAllPermissionsWithResourceTypes(
+        includeWithoutResourceTypes
+      );
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Retrieved ${permissions.length} permissions with resource type information`);
+      }
+
+      return permissions;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error getting all permissions with resource types:', error);
+      }
+      throw error;
     }
   }
 }

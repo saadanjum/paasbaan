@@ -7,6 +7,14 @@ module.exports = (sequelize) => {
       primaryKey: true,
       autoIncrement: true
     },
+    permission_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: 'permissions',
+        key: 'id'
+      }
+    },
     name: {
       type: DataTypes.STRING,
       allowNull: false,
@@ -30,7 +38,16 @@ module.exports = (sequelize) => {
     tableName: 'resource_level_permissions_types',
     underscored: true,
     paranoid: true,
-    timestamps: true
+    timestamps: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ['permission_id', 'name'],
+        where: {
+          deleted_at: null
+        }
+      }
+    ]
   });
 
   return ResourceLevelPermissionType;
