@@ -4,9 +4,11 @@ function initModels(sequelize) {
   // Import model definitions
   const AccessGroup = require('./accessGroup')(sequelize);
   const Permission = require('./permission')(sequelize);
-  const User = require('./user')(sequelize);
   const AccessGroupPermission = require('./accessGroupPermission')(sequelize);
+  const User = require('./user')(sequelize);
   const AccessGroupUser = require('./accessGroupUser')(sequelize);
+  const ResourceLevelPermissionType = require('./resourceLevelPermissionType')(sequelize);
+  const ResourceLevelPermission = require('./resourceLevelPermission')(sequelize);
 
   // Set up associations
   AccessGroup.belongsToMany(Permission, {
@@ -33,12 +35,56 @@ function initModels(sequelize) {
     as: 'access_groups'
   });
 
+  // Resource Level Permission associations
+  ResourceLevelPermissionType.hasMany(ResourceLevelPermission, {
+    foreignKey: 'resource_type_id',
+    as: 'permissions'
+  });
+
+  ResourceLevelPermission.belongsTo(ResourceLevelPermissionType, {
+    foreignKey: 'resource_type_id',
+    as: 'resource_type'
+  });
+
+  // Permission to ResourceLevelPermissionType associations
+  Permission.hasMany(ResourceLevelPermissionType, {
+    foreignKey: 'permission_id',
+    as: 'resource_types'
+  });
+
+  ResourceLevelPermissionType.belongsTo(Permission, {
+    foreignKey: 'permission_id',
+    as: 'permission'
+  });
+
+  Permission.hasMany(ResourceLevelPermission, {
+    foreignKey: 'permission_id',
+    as: 'resource_level_permissions'
+  });
+
+  ResourceLevelPermission.belongsTo(Permission, {
+    foreignKey: 'permission_id',
+    as: 'permission'
+  });
+
+  AccessGroup.hasMany(ResourceLevelPermission, {
+    foreignKey: 'access_group_id',
+    as: 'resource_level_permissions'
+  });
+
+  ResourceLevelPermission.belongsTo(AccessGroup, {
+    foreignKey: 'access_group_id',
+    as: 'access_group'
+  });
+
   const models = {
     AccessGroup,
     Permission,
     AccessGroupPermission,
     User,
-    AccessGroupUser
+    AccessGroupUser,
+    ResourceLevelPermissionType,
+    ResourceLevelPermission
   };
 
   return models;
