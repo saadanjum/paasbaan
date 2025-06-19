@@ -3,6 +3,30 @@
  * Handles operations related to access groups, permissions, and user assignments
  */
 
+/**
+ * Custom error class for duplicate access group names
+ */
+class DuplicateAccessGroupNameError extends Error {
+  constructor(name) {
+    super(`Access group with name '${name}' already exists`);
+    this.name = 'DuplicateAccessGroupNameError';
+    this.code = 'DUPLICATE_ACCESS_GROUP_NAME';
+    this.duplicateName = name;
+  }
+}
+
+/**
+ * Custom error class for duplicate permission codes
+ */
+class DuplicatePermissionCodeError extends Error {
+  constructor(code) {
+    super(`Permission with code '${code}' already exists`);
+    this.name = 'DuplicatePermissionCodeError';
+    this.code = 'DUPLICATE_PERMISSION_CODE';
+    this.duplicateCode = code;
+  }
+}
+
 class AccessGroupsManager {
   /**
    * @constructor
@@ -35,22 +59,28 @@ class AccessGroupsManager {
         throw new Error('Access group name is required');
       }
 
+      const trimmedName = name.trim();
+
       // Check if access group with the same name already exists
       const existingAccessGroup = await this.AccessGroup.findOne({
-        where: { name: name.trim() }
+        where: { name: trimmedName }
       });
 
       if (existingAccessGroup) {
-        throw new Error(`Access group with name '${name.trim()}' already exists`);
+        throw new DuplicateAccessGroupNameError(trimmedName);
       }
 
       const accessGroup = await this.AccessGroup.create({
-        name: name.trim(),
+        name: trimmedName,
         description: description || ''
       });
 
       return accessGroup;
     } catch (error) {
+      // Re-throw custom errors without wrapping them
+      if (error instanceof DuplicateAccessGroupNameError) {
+        throw error;
+      }
       throw new Error(`Error creating access group: ${error.message}`);
     }
   }
@@ -104,7 +134,7 @@ class AccessGroupsManager {
         });
 
         if (existingAccessGroup) {
-          throw new Error(`Access group with name '${trimmedName}' already exists`);
+          throw new DuplicateAccessGroupNameError(trimmedName);
         }
 
         filteredUpdateData.name = trimmedName;
@@ -124,6 +154,10 @@ class AccessGroupsManager {
       const updatedAccessGroup = await this.AccessGroup.findByPk(accessGroupId);
       return updatedAccessGroup;
     } catch (error) {
+      // Re-throw custom errors without wrapping them
+      if (error instanceof DuplicateAccessGroupNameError) {
+        throw error;
+      }
       throw new Error(`Error updating access group: ${error.message}`);
     }
   }
@@ -249,14 +283,29 @@ class AccessGroupsManager {
         throw new Error('Permission name is required');
       }
 
+      const trimmedCode = code.trim();
+
+      // Check if permission with the same code already exists
+      const existingPermission = await this.Permission.findOne({
+        where: { code: trimmedCode }
+      });
+
+      if (existingPermission) {
+        throw new DuplicatePermissionCodeError(trimmedCode);
+      }
+
       const permission = await this.Permission.create({
-        code,
-        name,
+        code: trimmedCode,
+        name: name.trim(),
         description: description || ''
       });
 
       return permission;
     } catch (error) {
+      // Re-throw custom errors without wrapping them
+      if (error instanceof DuplicatePermissionCodeError) {
+        throw error;
+      }
       throw new Error(`Error creating permission: ${error.message}`);
     }
   }
@@ -286,7 +335,7 @@ class AccessGroupsManager {
       // Check if permission exists
       const permission = await this.Permission.findByPk(permissionId);
       if (!permission) {
-        throw new Error(`Permission with ID ${permissionId} not found`);
+        throw new Error(`Invalid permission ID`);
       }
 
       // Check if permission is already assigned to access group
@@ -507,8 +556,452 @@ class AccessGroupsManager {
       throw new Error(`Error getting users in access group: ${error.message}`);
     }
   }
+
+  /**
+   * Create access group with users, permissions, and resource-level permissions in a single transaction
+   * @param {Object} accessGroupData - Access group data
+   * @param {string} accessGroupData.name - Access group name
+   * @param {string} [accessGroupData.description] - Access group description
+   * @param {Array<number>} accessGroupData.user_ids - Array of user IDs to add to the group
+   * @param {Array<Object>} accessGroupData.permissions - Array of permission objects
+   * @param {number} accessGroupData.permissions[].permission_id - Permission ID
+   * @param {Object} [accessGroupData.permissions[].resource_level_permissions] - Resource-level permissions (optional)
+   * @returns {Promise<Object>} - Created access group with assignments
+   */
+  async createAccessGroupWithAssignments(accessGroupData) {
+    const transaction = await this.db.sequelize.transaction();
+    
+    try {
+      const { name, description, user_ids = [], permissions = [] } = accessGroupData;
+
+      if (!name) {
+        throw new Error('Access group name is required');
+      }
+
+      // Validate input data
+      if (!Array.isArray(user_ids)) {
+        throw new Error('user_ids must be an array');
+      }
+
+      if (!Array.isArray(permissions)) {
+        throw new Error('permissions must be an array');
+      }
+
+      const trimmedName = name.trim();
+
+      // Check if access group with the same name already exists
+      const existingAccessGroup = await this.AccessGroup.findOne({
+        where: { name: trimmedName },
+        transaction
+      });
+
+      if (existingAccessGroup) {
+        throw new DuplicateAccessGroupNameError(trimmedName);
+      }
+
+      // Step 1: Create the access group
+      const accessGroup = await this.AccessGroup.create({
+        name: trimmedName,
+        description: description || ''
+      }, { transaction });
+
+      // Step 2: Add users to the access group
+      const userAssignments = [];
+      for (const userId of user_ids) {
+        // Check if user exists (optional validation)
+        if (this.db.User) {
+          const userExists = await this.db.User.findByPk(userId, { transaction });
+          if (!userExists) {
+            throw new Error(`User not found for access group assignment`);
+          }
+        }
+
+        // Check if user is already in access group (should not happen in creation, but safety check)
+        const existingUserAssignment = await this.AccessGroupUser.findOne({
+          where: {
+            access_group_id: accessGroup.id,
+            user_id: userId
+          },
+          transaction
+        });
+
+        if (!existingUserAssignment) {
+          const assignment = await this.AccessGroupUser.create({
+            access_group_id: accessGroup.id,
+            user_id: userId
+          }, { transaction });
+          userAssignments.push(assignment);
+        }
+      }
+
+      // Step 3: Add permissions and resource-level permissions
+      const permissionAssignments = [];
+      const resourceLevelPermissions = [];
+
+      for (const permissionData of permissions) {
+        const { permission_id, resource_level_permissions = {} } = permissionData;
+
+        if (!permission_id) {
+          throw new Error('permission_id is required for each permission');
+        }
+
+        // Validate permission exists
+        const permission = await this.Permission.findByPk(permission_id, { transaction });
+        if (!permission) {
+          throw new Error(`Invalid permission ID`);
+        }
+
+        // Check if permission is already assigned to access group
+        const existingPermissionAssignment = await this.AccessGroupPermission.findOne({
+          where: {
+            access_group_id: accessGroup.id,
+            permission_id: permission_id
+          },
+          transaction
+        });
+
+        if (!existingPermissionAssignment) {
+          const assignment = await this.AccessGroupPermission.create({
+            access_group_id: accessGroup.id,
+            permission_id: permission_id
+          }, { transaction });
+          permissionAssignments.push(assignment);
+        }
+
+        // Handle resource-level permissions if provided and models exist
+        if (this.db.ResourceLevelPermission && this.db.ResourceLevelPermissionType && 
+            Object.keys(resource_level_permissions).length > 0) {
+          
+          for (const [resource_name, resource_ids] of Object.entries(resource_level_permissions)) {
+            if (!Array.isArray(resource_ids)) {
+              throw new Error(`Resource IDs for ${resource_name} must be an array`);
+            }
+
+            // Get or create resource type
+            let resourceType = await this.db.ResourceLevelPermissionType.findOne({
+              where: {
+                permission_id: permission_id,
+                name: resource_name
+              },
+              transaction
+            });
+
+            if (!resourceType) {
+              resourceType = await this.db.ResourceLevelPermissionType.create({
+                permission_id: permission_id,
+                name: resource_name
+              }, { transaction });
+            }
+
+            // Create resource-level permissions
+            for (const resource_id of resource_ids) {
+              // Check if resource-level permission already exists
+              const existingResourcePermission = await this.db.ResourceLevelPermission.findOne({
+                where: {
+                  permission_id: permission_id,
+                  resource_id: resource_id,
+                  resource_type_id: resourceType.id,
+                  access_group_id: accessGroup.id
+                },
+                transaction
+              });
+
+              if (!existingResourcePermission) {
+                const resourcePermission = await this.db.ResourceLevelPermission.create({
+                  permission_id: permission_id,
+                  resource_id: resource_id,
+                  resource_type_id: resourceType.id,
+                  access_group_id: accessGroup.id
+                }, { transaction });
+                resourceLevelPermissions.push(resourcePermission);
+              }
+            }
+          }
+        }
+      }
+
+      // Commit the transaction
+      await transaction.commit();
+
+      // Return the created access group with assignment details
+      return {
+        access_group: accessGroup,
+        user_assignments: userAssignments,
+        permission_assignments: permissionAssignments,
+        resource_level_permissions: resourceLevelPermissions,
+        summary: {
+          users_added: userAssignments.length,
+          permissions_added: permissionAssignments.length,
+          resource_permissions_added: resourceLevelPermissions.length
+        }
+      };
+
+    } catch (error) {
+      // Rollback the transaction on error
+      await transaction.rollback();
+      
+      // Re-throw custom errors without wrapping them
+      if (error instanceof DuplicateAccessGroupNameError) {
+        throw error;
+      }
+      throw new Error(`Error creating access group with assignments: ${error.message}`);
+    }
+  }
+
+  /**
+   * Update access group with users, permissions, and resource-level permissions in a single transaction
+   * @param {number} accessGroupId - Access group ID to update
+   * @param {Object} updateData - Update data
+   * @param {string} [updateData.name] - New access group name
+   * @param {string} [updateData.description] - New access group description
+   * @param {Array<number>} [updateData.user_ids] - Array of user IDs (replaces existing users)
+   * @param {Array<Object>} [updateData.permissions] - Array of permission objects (replaces existing permissions)
+   * @param {number} updateData.permissions[].permission_id - Permission ID
+   * @param {Object} [updateData.permissions[].resource_level_permissions] - Resource-level permissions (optional)
+   * @param {boolean} [updateData.replace_assignments=true] - Whether to replace existing assignments or add to them
+   * @returns {Promise<Object>} - Updated access group with assignments
+   */
+  async updateAccessGroupWithAssignments(accessGroupId, updateData) {
+    const transaction = await this.db.sequelize.transaction();
+    
+    try {
+      if (!accessGroupId) {
+        throw new Error('Access group ID is required');
+      }
+
+      if (!updateData || Object.keys(updateData).length === 0) {
+        throw new Error('Update data is required');
+      }
+
+      const { name, description, user_ids, permissions, replace_assignments = true } = updateData;
+
+      // Check if access group exists
+      const accessGroup = await this.AccessGroup.findByPk(accessGroupId, { transaction });
+      if (!accessGroup) {
+        throw new Error(`Access group with ID ${accessGroupId} not found`);
+      }
+
+      // Step 1: Update access group basic info if provided
+      const groupUpdateData = {};
+      if (name !== undefined) {
+        const trimmedName = name.trim();
+        
+        // Check if another access group with the same name exists (excluding current group)
+        const existingAccessGroup = await this.AccessGroup.findOne({
+          where: { 
+            name: trimmedName,
+            id: { [this.db.Sequelize.Op.ne]: accessGroupId }
+          },
+          transaction
+        });
+
+        if (existingAccessGroup) {
+          throw new DuplicateAccessGroupNameError(trimmedName);
+        }
+
+        groupUpdateData.name = trimmedName;
+      }
+
+      if (description !== undefined) {
+        groupUpdateData.description = description;
+      }
+
+      if (Object.keys(groupUpdateData).length > 0) {
+        await this.AccessGroup.update(groupUpdateData, {
+          where: { id: accessGroupId },
+          transaction
+        });
+      }
+
+      let userAssignments = [];
+      let permissionAssignments = [];
+      let resourceLevelPermissions = [];
+
+      // Step 2: Handle user assignments if provided
+      if (user_ids !== undefined) {
+        if (!Array.isArray(user_ids)) {
+          throw new Error('user_ids must be an array');
+        }
+
+        if (replace_assignments) {
+          // Remove existing user assignments
+          await this.AccessGroupUser.destroy({
+            where: { access_group_id: accessGroupId },
+            transaction
+          });
+        }
+
+        // Add new users
+        for (const userId of user_ids) {
+          // Check if user exists (optional validation)
+          if (this.db.User) {
+            const userExists = await this.db.User.findByPk(userId, { transaction });
+            if (!userExists) {
+              throw new Error(`User not found for access group assignment`);
+            }
+          }
+
+          // Check if user is already in access group
+          const existingUserAssignment = await this.AccessGroupUser.findOne({
+            where: {
+              access_group_id: accessGroupId,
+              user_id: userId
+            },
+            transaction
+          });
+
+          if (!existingUserAssignment) {
+            const assignment = await this.AccessGroupUser.create({
+              access_group_id: accessGroupId,
+              user_id: userId
+            }, { transaction });
+            userAssignments.push(assignment);
+          }
+        }
+      }
+
+      // Step 3: Handle permission assignments if provided
+      if (permissions !== undefined) {
+        if (!Array.isArray(permissions)) {
+          throw new Error('permissions must be an array');
+        }
+
+        if (replace_assignments) {
+          // Remove existing resource-level permissions first
+          if (this.db.ResourceLevelPermission) {
+            await this.db.ResourceLevelPermission.destroy({
+              where: { access_group_id: accessGroupId },
+              transaction
+            });
+          }
+
+          // Remove existing permission assignments
+          await this.AccessGroupPermission.destroy({
+            where: { access_group_id: accessGroupId },
+            transaction
+          });
+        }
+
+        // Add new permissions and resource-level permissions
+        for (const permissionData of permissions) {
+          const { permission_id, resource_level_permissions = {} } = permissionData;
+
+          if (!permission_id) {
+            throw new Error('permission_id is required for each permission');
+          }
+
+          // Validate permission exists
+          const permission = await this.Permission.findByPk(permission_id, { transaction });
+          if (!permission) {
+            throw new Error(`Invalid permission ID`);
+          }
+
+          // Check if permission is already assigned to access group
+          const existingPermissionAssignment = await this.AccessGroupPermission.findOne({
+            where: {
+              access_group_id: accessGroupId,
+              permission_id: permission_id
+            },
+            transaction
+          });
+
+          if (!existingPermissionAssignment) {
+            const assignment = await this.AccessGroupPermission.create({
+              access_group_id: accessGroupId,
+              permission_id: permission_id
+            }, { transaction });
+            permissionAssignments.push(assignment);
+          }
+
+          // Handle resource-level permissions if provided and models exist
+          if (this.db.ResourceLevelPermission && this.db.ResourceLevelPermissionType && 
+              Object.keys(resource_level_permissions).length > 0) {
+            
+            for (const [resource_name, resource_ids] of Object.entries(resource_level_permissions)) {
+              if (!Array.isArray(resource_ids)) {
+                throw new Error(`Resource IDs for ${resource_name} must be an array`);
+              }
+
+              // Get or create resource type
+              let resourceType = await this.db.ResourceLevelPermissionType.findOne({
+                where: {
+                  permission_id: permission_id,
+                  name: resource_name
+                },
+                transaction
+              });
+
+              if (!resourceType) {
+                resourceType = await this.db.ResourceLevelPermissionType.create({
+                  permission_id: permission_id,
+                  name: resource_name
+                }, { transaction });
+              }
+
+              // Create resource-level permissions
+              for (const resource_id of resource_ids) {
+                // Check if resource-level permission already exists
+                const existingResourcePermission = await this.db.ResourceLevelPermission.findOne({
+                  where: {
+                    permission_id: permission_id,
+                    resource_id: resource_id,
+                    resource_type_id: resourceType.id,
+                    access_group_id: accessGroupId
+                  },
+                  transaction
+                });
+
+                if (!existingResourcePermission) {
+                  const resourcePermission = await this.db.ResourceLevelPermission.create({
+                    permission_id: permission_id,
+                    resource_id: resource_id,
+                    resource_type_id: resourceType.id,
+                    access_group_id: accessGroupId
+                  }, { transaction });
+                  resourceLevelPermissions.push(resourcePermission);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Commit the transaction
+      await transaction.commit();
+
+      // Get updated access group
+      const updatedAccessGroup = await this.AccessGroup.findByPk(accessGroupId);
+
+      // Return the updated access group with assignment details
+      return {
+        access_group: updatedAccessGroup,
+        user_assignments: userAssignments,
+        permission_assignments: permissionAssignments,
+        resource_level_permissions: resourceLevelPermissions,
+        summary: {
+          users_processed: user_ids ? user_ids.length : 0,
+          permissions_processed: permissions ? permissions.length : 0,
+          users_added: userAssignments.length,
+          permissions_added: permissionAssignments.length,
+          resource_permissions_added: resourceLevelPermissions.length
+        }
+      };
+
+    } catch (error) {
+      // Rollback the transaction on error
+      await transaction.rollback();
+      
+      // Re-throw custom errors without wrapping them
+      if (error instanceof DuplicateAccessGroupNameError) {
+        throw error;
+      }
+      throw new Error(`Error updating access group with assignments: ${error.message}`);
+    }
+  }
 }
 
 module.exports = {
-  AccessGroupsManager
+  AccessGroupsManager,
+  DuplicateAccessGroupNameError,
+  DuplicatePermissionCodeError
 }; 

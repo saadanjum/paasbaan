@@ -340,6 +340,348 @@ Clears the cached permissions for a user.
 accessControl.clearUserCache(userId);
 ```
 
+### Comprehensive Access Group Management
+
+For practical applications, paasbaan provides comprehensive methods that handle all access group operations in a single atomic transaction. These methods are ideal for creating or updating access groups with all their associations in one call, ensuring data consistency.
+
+##### `createAccessGroupWithAssignments(accessGroupData)`
+
+Creates an access group with users, permissions, and resource-level permissions in a single atomic transaction. This method performs all operations within a database transaction, ensuring data consistency - if any step fails, all changes are rolled back.
+
+**Parameters:**
+- `accessGroupData.name` (string, required): Access group name
+- `accessGroupData.description` (string, optional): Access group description
+- `accessGroupData.user_ids` (Array<number>, optional): Array of user IDs to add to the group
+- `accessGroupData.permissions` (Array<Object>, optional): Array of permission objects
+
+**Permission Object Structure:**
+- `permission_id` (number, required): Permission ID
+- `resource_level_permissions` (Object, optional): Resource-level permissions where keys are resource type names and values are arrays of resource IDs
+
+**Example Usage:**
+
+```javascript
+const accessGroupData = {
+  name: 'Regional Managers',
+  description: 'Managers with access to specific regional data',
+  user_ids: [3, 4, 5],
+  permissions: [
+    {
+      permission_id: 12,
+      resource_level_permissions: {
+        location: [1, 2],
+        department: [10, 15]
+      }
+    },
+    {
+      permission_id: 13,
+      resource_level_permissions: {
+        location: [1, 2]
+      }
+    },
+    {
+      permission_id: 24 // No resource-level restrictions
+    }
+  ]
+};
+
+try {
+  const result = await accessControl.createAccessGroupWithAssignments(accessGroupData);
+  
+  console.log('Created access group:', result.access_group);
+  console.log('Summary:', result.summary);
+  // Output: {
+  //   users_added: 3,
+  //   permissions_added: 3,
+  //   resource_permissions_added: 6
+  // }
+  
+  console.log('User assignments:', result.user_assignments);
+  console.log('Permission assignments:', result.permission_assignments);
+  console.log('Resource-level permissions:', result.resource_level_permissions);
+  
+} catch (error) {
+  if (error instanceof DuplicateAccessGroupNameError) {
+    console.error('Access group name already exists:', error.duplicateName);
+  } else {
+    console.error('Error creating access group:', error.message);
+  }
+}
+```
+
+**Return Value:**
+The method returns an object with the following structure:
+```javascript
+{
+  access_group: { /* Created access group object */ },
+  user_assignments: [ /* Array of created user assignments */ ],
+  permission_assignments: [ /* Array of created permission assignments */ ],
+  resource_level_permissions: [ /* Array of created resource-level permissions */ ],
+  summary: {
+    users_added: 3,
+    permissions_added: 2,
+    resource_permissions_added: 5
+  }
+}
+```
+
+##### `updateAccessGroupWithAssignments(accessGroupId, updateData)`
+
+Updates an access group with users, permissions, and resource-level permissions in a single atomic transaction. By default, this method replaces existing assignments with the new ones provided.
+
+**Parameters:**
+- `accessGroupId` (number, required): Access group ID to update
+- `updateData.name` (string, optional): New access group name
+- `updateData.description` (string, optional): New access group description
+- `updateData.user_ids` (Array<number>, optional): Array of user IDs (replaces existing users by default)
+- `updateData.permissions` (Array<Object>, optional): Array of permission objects (replaces existing permissions by default)
+- `updateData.replace_assignments` (boolean, optional): Whether to replace existing assignments or add to them. Default: `true`
+
+**Example Usage:**
+
+```javascript
+const updateData = {
+  name: 'Senior Regional Managers',
+  description: 'Updated description for senior managers',
+  user_ids: [3, 4, 5, 6], // This will replace existing users
+  permissions: [
+    {
+      permission_id: 12,
+      resource_level_permissions: {
+        location: [1, 2, 3], // Updated resource access
+        department: [10, 15, 20]
+      }
+    },
+    {
+      permission_id: 25 // New permission
+    }
+  ],
+  replace_assignments: true // Default behavior - replaces existing assignments
+};
+
+try {
+  const result = await accessControl.updateAccessGroupWithAssignments(1, updateData);
+  
+  console.log('Updated access group:', result.access_group);
+  console.log('Summary:', result.summary);
+  // Output: {
+  //   users_processed: 4,
+  //   permissions_processed: 2,
+  //   users_added: 1,        // Only new users
+  //   permissions_added: 1,   // Only new permissions
+  //   resource_permissions_added: 5
+  // }
+  
+} catch (error) {
+  if (error instanceof DuplicateAccessGroupNameError) {
+    console.error('Access group name already exists:', error.duplicateName);
+  } else {
+    console.error('Error updating access group:', error.message);
+  }
+}
+
+// Example: Adding to existing assignments instead of replacing
+const additiveUpdateData = {
+  user_ids: [7, 8], // These will be added to existing users
+  permissions: [
+    {
+      permission_id: 26,
+      resource_level_permissions: {
+        location: [4, 5]
+      }
+    }
+  ],
+  replace_assignments: false // Add to existing assignments
+};
+
+const result = await accessControl.updateAccessGroupWithAssignments(1, additiveUpdateData);
+```
+
+**Benefits of Comprehensive Methods:**
+
+1. **Atomic Operations**: All operations are performed within a single database transaction
+2. **Data Consistency**: If any step fails, all changes are rolled back
+3. **Reduced Complexity**: Handle complex access group setup in a single method call
+4. **Performance**: Fewer database round trips compared to individual method calls
+5. **Cache Management**: Automatically handles cache invalidation for affected users
+6. **Error Handling**: Comprehensive error handling with rollback on failure
+
+**When to Use:**
+
+- **Initial Setup**: Creating access groups with all their associations
+- **Bulk Updates**: Updating multiple aspects of an access group at once
+- **Data Migration**: Moving access control data between systems
+- **Administrative Interfaces**: Building admin panels that manage complete access group configurations
+
+**Alternative Approach for Partial Updates:**
+
+If you only need to update specific aspects without replacing all assignments, you can:
+
+1. Use the individual methods (`addUserToAccessGroup`, `assignPermissionToAccessGroup`, etc.) for granular control
+2. Use `updateAccessGroupWithAssignments` with `replace_assignments: false` to add to existing assignments
+3. Use the basic `updateAccessGroup` method for simple name/description updates
+
+### Error Handling
+
+Paasbaan provides specific error classes for common validation scenarios, making it easier to handle errors programmatically in your application.
+
+#### Custom Error Classes
+
+The module exports custom error classes that you can import and use for error handling:
+
+```javascript
+const AccessControl = require('paasbaan');
+const { DuplicateAccessGroupNameError, DuplicatePermissionCodeError } = AccessControl;
+
+// Or import them separately
+const { DuplicateAccessGroupNameError, DuplicatePermissionCodeError } = require('paasbaan');
+```
+
+##### `DuplicateAccessGroupNameError`
+
+Thrown when attempting to create or update an access group with a name that already exists.
+
+**Properties:**
+- `name`: `'DuplicateAccessGroupNameError'`
+- `code`: `'DUPLICATE_ACCESS_GROUP_NAME'`
+- `duplicateName`: The name that caused the conflict
+- `message`: Descriptive error message
+
+**Example Usage:**
+
+```javascript
+try {
+  const accessGroup = await accessControl.createAccessGroup({
+    name: 'Administrators', // This name already exists
+    description: 'System administrators'
+  });
+} catch (error) {
+  if (error instanceof DuplicateAccessGroupNameError) {
+    console.log(`Access group name '${error.duplicateName}' is already taken`);
+    // Handle duplicate name scenario
+    // For example: suggest alternative names, show validation error to user
+  } else {
+    // Handle other types of errors
+    console.error('Unexpected error:', error.message);
+  }
+}
+
+// Alternative approach using error code
+try {
+  await accessControl.updateAccessGroup(1, { name: 'Existing Name' });
+} catch (error) {
+  if (error.code === 'DUPLICATE_ACCESS_GROUP_NAME') {
+    // Handle duplicate name error
+    res.status(400).json({
+      error: 'DUPLICATE_NAME',
+      message: `The access group name '${error.duplicateName}' is already in use`,
+      field: 'name'
+    });
+  }
+}
+```
+
+##### `DuplicatePermissionCodeError`
+
+Thrown when attempting to create a permission with a code that already exists.
+
+**Properties:**
+- `name`: `'DuplicatePermissionCodeError'`
+- `code`: `'DUPLICATE_PERMISSION_CODE'`
+- `duplicateCode`: The permission code that caused the conflict
+- `message`: Descriptive error message
+
+**Example Usage:**
+
+```javascript
+try {
+  const permission = await accessControl.createPermission({
+    code: 'read:users', // This code already exists
+    name: 'Read Users',
+    description: 'Permission to read user data'
+  });
+} catch (error) {
+  if (error instanceof DuplicatePermissionCodeError) {
+    console.log(`Permission code '${error.duplicateCode}' already exists`);
+    // Handle duplicate code scenario
+  } else {
+    console.error('Unexpected error:', error.message);
+  }
+}
+```
+
+#### Express.js Error Handling Example
+
+Here's how you can integrate these error classes in an Express.js application:
+
+```javascript
+const express = require('express');
+const AccessControl = require('paasbaan');
+const { DuplicateAccessGroupNameError, DuplicatePermissionCodeError } = AccessControl;
+
+const app = express();
+const accessControl = new AccessControl({ /* config */ });
+
+// API endpoint for creating access groups
+app.post('/api/access-groups', async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    const accessGroup = await accessControl.createAccessGroup({ name, description });
+    
+    res.status(201).json({
+      success: true,
+      data: accessGroup
+    });
+  } catch (error) {
+    if (error instanceof DuplicateAccessGroupNameError) {
+      return res.status(400).json({
+        success: false,
+        error: 'DUPLICATE_ACCESS_GROUP_NAME',
+        message: error.message,
+        field: 'name',
+        duplicateValue: error.duplicateName
+      });
+    }
+    
+    // Handle other validation errors
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred'
+    });
+  }
+});
+
+// API endpoint for creating permissions
+app.post('/api/permissions', async (req, res) => {
+  try {
+    const { code, name, description } = req.body;
+    const permission = await accessControl.createPermission({ code, name, description });
+    
+    res.status(201).json({
+      success: true,
+      data: permission
+    });
+  } catch (error) {
+    if (error instanceof DuplicatePermissionCodeError) {
+      return res.status(400).json({
+        success: false,
+        error: 'DUPLICATE_PERMISSION_CODE',
+        message: error.message,
+        field: 'code',
+        duplicateValue: error.duplicateCode
+      });
+    }
+    
+    res.status(500).json({
+      success: false,
+      error: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred'
+    });
+  }
+});
+```
+
 ### Resource Level Permissions
 
 Resource level permissions allow you to restrict access to specific resources (e.g., locations, departments) for users with specific permissions. This is useful when you want to grant users access to only certain instances of a resource type with specific permissions.
@@ -471,34 +813,40 @@ accessControl.clearResourcePermissionsCache(1, 'location', 1);
 
 ##### `getAccessGroupResourceLevelPermissions(access_group_id, resource_name, permission_id)`
 
-Gets resource level permissions assigned to an access group with optional filtering.
+Gets all permissions assigned to an access group, including both those with resource-level permissions and those without resource type requirements, with optional filtering.
 
 - `access_group_id`: ID of the access group
-- `resource_name` (optional): Name of the resource type to filter by
+- `resource_name` (optional): Name of the resource type to filter by. When specified, only returns permissions that have resource-level permissions for that resource type.
 - `permission_id` (optional): ID of the permission to filter by
 
 Returns an object with a `permissions` array where each permission contains:
 - `id`: Permission ID
 - `code`: Permission code
 - `name`: Permission name
-- `resources`: Object with resource types as keys and arrays of resource IDs as values
+- `resources`: Object with resource types as keys and arrays of resource IDs as values. Empty object `{}` for permissions without resource-level restrictions.
 
 ```javascript
-// Get all resource level permissions for an access group
+// Get all permissions assigned to an access group (including those without resource restrictions)
 const result = await accessControl.getAccessGroupResourceLevelPermissions(1);
 
-// Get resource level permissions for specific resource type
+// Get only permissions that have resource-level permissions for 'location'
 const locationResult = await accessControl.getAccessGroupResourceLevelPermissions(1, 'location');
 
-// Get resource level permissions for specific permission
+// Get all permissions assigned to access group with ID 5 (specific permission)
 const readResult = await accessControl.getAccessGroupResourceLevelPermissions(1, null, 5);
 
-// Get resource level permissions for specific resource type and permission
+// Get specific permission with specific resource type
 const specificResult = await accessControl.getAccessGroupResourceLevelPermissions(1, 'location', 5);
 
 // Example response structure:
 // {
 //   permissions: [
+//     {
+//       id: 3,
+//       code: 'read:users',
+//       name: 'Read Users',
+//       resources: {} // No resource-level restrictions - full access
+//     },
 //     {
 //       id: 4,
 //       code: 'read:observations',
@@ -516,10 +864,18 @@ const specificResult = await accessControl.getAccessGroupResourceLevelPermission
 //         location: [1, 2],
 //         department: [10]
 //       }
+//     },
+//     {
+//       id: 6,
+//       code: 'admin:system',
+//       name: 'System Administration',
+//       resources: {} // No resource-level restrictions - full access
 //     }
 //   ]
 // }
 ```
+
+**Note**: Permissions with an empty `resources` object `{}` indicate that the permission is assigned to the access group without any resource-level restrictions, meaning users in this group have full access for that permission across all resources.
 
 ## CLI Usage
 

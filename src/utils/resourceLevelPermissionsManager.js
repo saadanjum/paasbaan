@@ -19,6 +19,7 @@ class ResourceLevelPermissionsManager {
     this.AccessGroup = db.AccessGroup;
     this.Permission = db.Permission;
     this.AccessGroupUser = db.AccessGroupUser;
+    this.AccessGroupPermission = db.AccessGroupPermission;
   }
 
   /**
@@ -210,7 +211,7 @@ class ResourceLevelPermissionsManager {
    * @param {number} access_group_id - Access group ID
    * @param {string} [resource_name] - Optional resource type name to filter by
    * @param {number} [permission_id] - Optional permission ID to filter by
-   * @returns {Promise<Object>} - Object with permissions array containing grouped resource access
+   * @returns {Promise<Object>} - Object with permissions array containing all assigned permissions
    */
   async getAccessGroupResourceLevelPermissions(access_group_id, resource_name, permission_id) {
     try {
@@ -219,10 +220,49 @@ class ResourceLevelPermissionsManager {
         throw new Error('Access group ID is required');
       }
 
-      // Build where clause
-      const whereClause = {
+      // Step 1: Get all permissions assigned to the access group
+      const accessGroupPermissionWhere = {
         access_group_id: access_group_id
       };
+
+      // Add permission filter if provided
+      if (permission_id) {
+        accessGroupPermissionWhere.permission_id = permission_id;
+      }
+
+      const assignedPermissions = await this.AccessGroupPermission.findAll({
+        where: accessGroupPermissionWhere,
+        include: [
+          {
+            model: this.Permission,
+            as: 'permission',
+            attributes: ['id', 'code', 'name']
+          }
+        ],
+        attributes: ['permission_id']
+      });
+
+      // Create permission map with basic info
+      const permissionMap = new Map();
+      assignedPermissions.forEach(agp => {
+        const permission = agp.permission;
+        permissionMap.set(permission.id, {
+          id: permission.id,
+          code: permission.code,
+          name: permission.name,
+          resources: {}
+        });
+      });
+
+      // Step 2: Get resource-level permissions for the access group
+      const resourcePermissionWhere = {
+        access_group_id: access_group_id
+      };
+
+      // Add permission filter if provided
+      if (permission_id) {
+        resourcePermissionWhere.permission_id = permission_id;
+      }
 
       // Add resource type filter if provided
       if (resource_name) {
@@ -234,17 +274,12 @@ class ResourceLevelPermissionsManager {
           throw new Error(`Resource type '${resource_name}' not found`);
         }
 
-        whereClause.resource_type_id = resourceType.id;
-      }
-
-      // Add permission filter if provided
-      if (permission_id) {
-        whereClause.permission_id = permission_id;
+        resourcePermissionWhere.resource_type_id = resourceType.id;
       }
 
       // Get resource level permissions with related data
-      const permissions = await this.ResourceLevelPermission.findAll({
-        where: whereClause,
+      const resourcePermissions = await this.ResourceLevelPermission.findAll({
+        where: resourcePermissionWhere,
         include: [
           {
             model: this.ResourceLevelPermissionType,
@@ -260,39 +295,40 @@ class ResourceLevelPermissionsManager {
         attributes: ['id', 'resource_id', 'created_at', 'updated_at']
       });
 
-      // Group permissions by permission ID and resource type
-      const permissionMap = new Map();
-
-      permissions.forEach(perm => {
+      // Step 3: Add resource-level permission data to the permission map
+      resourcePermissions.forEach(perm => {
         const permissionId = perm.permission.id;
         const resourceTypeName = perm.resource_type.name;
         const resourceId = perm.resource_id;
 
-        // Initialize permission entry if it doesn't exist
-        if (!permissionMap.has(permissionId)) {
-          permissionMap.set(permissionId, {
-            id: perm.permission.id,
-            code: perm.permission.code,
-            name: perm.permission.name,
-            resources: {}
-          });
-        }
+        // Only process if this permission is assigned to the access group
+        if (permissionMap.has(permissionId)) {
+          const permissionEntry = permissionMap.get(permissionId);
 
-        const permissionEntry = permissionMap.get(permissionId);
+          // Initialize resource type array if it doesn't exist
+          if (!permissionEntry.resources[resourceTypeName]) {
+            permissionEntry.resources[resourceTypeName] = [];
+          }
 
-        // Initialize resource type array if it doesn't exist
-        if (!permissionEntry.resources[resourceTypeName]) {
-          permissionEntry.resources[resourceTypeName] = [];
-        }
-
-        // Add resource ID if not already present
-        if (!permissionEntry.resources[resourceTypeName].includes(resourceId)) {
-          permissionEntry.resources[resourceTypeName].push(resourceId);
+          // Add resource ID if not already present
+          if (!permissionEntry.resources[resourceTypeName].includes(resourceId)) {
+            permissionEntry.resources[resourceTypeName].push(resourceId);
+          }
         }
       });
 
-      // Convert map to array and sort resource IDs
-      const permissionsArray = Array.from(permissionMap.values()).map(permission => ({
+      // Step 4: Filter permissions based on resource_name if specified and return only those with that resource type
+      let permissionsArray = Array.from(permissionMap.values());
+      
+      if (resource_name) {
+        // If resource_name is specified, only return permissions that have resource-level permissions for that resource type
+        permissionsArray = permissionsArray.filter(permission => 
+          permission.resources[resource_name] && permission.resources[resource_name].length > 0
+        );
+      }
+
+      // Step 5: Sort resource IDs within each resource type and sort permissions by ID
+      permissionsArray = permissionsArray.map(permission => ({
         ...permission,
         resources: Object.keys(permission.resources).reduce((acc, resourceType) => {
           acc[resourceType] = permission.resources[resourceType].sort((a, b) => a - b);
@@ -358,7 +394,7 @@ class ResourceLevelPermissionsManager {
       // Check if permission exists
       const permission = await this.Permission.findByPk(permission_id);
       if (!permission) {
-        throw new Error(`Permission with ID ${permission_id} not found`);
+        throw new Error(`Invalid permission ID`);
       }
 
       // Create or find the resource type requirement

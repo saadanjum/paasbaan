@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const NodeCache = require('node-cache');
 const { validateTables, setupInitialData } = require('./src/utils/dbValidation');
 const authMiddleware = require('./src/middleware/authMiddleware');
-const { AccessGroupsManager } = require('./src/utils/accessGroupsManager');
+const { AccessGroupsManager, DuplicateAccessGroupNameError, DuplicatePermissionCodeError } = require('./src/utils/accessGroupsManager');
 const { ResourceLevelPermissionsManager } = require('./src/utils/resourceLevelPermissionsManager');
 
 class AccessControl {
@@ -333,6 +333,83 @@ class AccessControl {
   }
 
   /**
+   * Create access group with users, permissions, and resource-level permissions in a single transaction
+   * @param {Object} accessGroupData - Access group data
+   * @param {string} accessGroupData.name - Access group name
+   * @param {string} [accessGroupData.description] - Access group description
+   * @param {Array<number>} accessGroupData.user_ids - Array of user IDs to add to the group
+   * @param {Array<Object>} accessGroupData.permissions - Array of permission objects
+   * @param {number} accessGroupData.permissions[].permission_id - Permission ID
+   * @param {Object} [accessGroupData.permissions[].resource_level_permissions] - Resource-level permissions (optional)
+   * @returns {Promise<Object>} - Created access group with assignments
+   */
+  async createAccessGroupWithAssignments(accessGroupData) {
+    try {
+      const result = await this.accessGroupsManager.createAccessGroupWithAssignments(accessGroupData);
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Created access group '${result.access_group.name}' with ${result.summary.users_added} users, ${result.summary.permissions_added} permissions, and ${result.summary.resource_permissions_added} resource permissions`);
+      }
+
+      // Clear cache for all affected users
+      if (this.cache === 'in-memory' && accessGroupData.user_ids) {
+        accessGroupData.user_ids.forEach(userId => this.clearUserCache(userId));
+      }
+
+      return result;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error creating access group with assignments:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Update access group with users, permissions, and resource-level permissions in a single transaction
+   * @param {number} accessGroupId - Access group ID to update
+   * @param {Object} updateData - Update data
+   * @param {string} [updateData.name] - New access group name
+   * @param {string} [updateData.description] - New access group description
+   * @param {Array<number>} [updateData.user_ids] - Array of user IDs (replaces existing users)
+   * @param {Array<Object>} [updateData.permissions] - Array of permission objects (replaces existing permissions)
+   * @param {number} updateData.permissions[].permission_id - Permission ID
+   * @param {Object} [updateData.permissions[].resource_level_permissions] - Resource-level permissions (optional)
+   * @param {boolean} [updateData.replace_assignments=true] - Whether to replace existing assignments or add to them
+   * @returns {Promise<Object>} - Updated access group with assignments
+   */
+  async updateAccessGroupWithAssignments(accessGroupId, updateData) {
+    try {
+      // Get existing users before update to clear their cache
+      const existingUsers = this.cache === 'in-memory' ? await this.accessGroupsManager.getUsersInAccessGroup(accessGroupId) : [];
+
+      const result = await this.accessGroupsManager.updateAccessGroupWithAssignments(accessGroupId, updateData);
+
+      if (this.logging === 'console') {
+        console.log(`[AccessControl] Updated access group ${accessGroupId} with ${result.summary.users_added} new users, ${result.summary.permissions_added} new permissions, and ${result.summary.resource_permissions_added} resource permissions`);
+      }
+
+      // Clear cache for affected users
+      if (this.cache === 'in-memory') {
+        // Clear cache for previously assigned users
+        existingUsers.forEach(user => this.clearUserCache(user.id));
+        
+        // Clear cache for newly assigned users
+        if (updateData.user_ids) {
+          updateData.user_ids.forEach(userId => this.clearUserCache(userId));
+        }
+      }
+
+      return result;
+    } catch (error) {
+      if (this.logging === 'console') {
+        console.error('[AccessControl] Error updating access group with assignments:', error);
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Add resource level permission
    * @param {number} permission_id - Permission ID
    * @param {Array<number>} resource_ids - Array of resource IDs
@@ -619,4 +696,6 @@ class AccessControl {
   }
 }
 
-module.exports = AccessControl; 
+module.exports = AccessControl;
+module.exports.DuplicateAccessGroupNameError = DuplicateAccessGroupNameError;
+module.exports.DuplicatePermissionCodeError = DuplicatePermissionCodeError; 
