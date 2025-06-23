@@ -142,7 +142,7 @@ class ResourceLevelPermissionsManager {
 
       // Get resource type
       const resourceType = await this.ResourceLevelPermissionType.findOne({
-        where: { name: resource_name }
+        where: { name: resource_name, permission_id: permission_id }
       });
 
       if (!resourceType) {
